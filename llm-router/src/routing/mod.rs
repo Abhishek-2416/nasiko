@@ -25,6 +25,8 @@ pub mod classifier_eval;
 pub mod classifier_service;
 pub mod context;
 pub mod jev;
+pub mod laya;
+pub mod rubric;
 // The salience classifier itself — feature engine, weight loading, scoring, banding.
 // Private to `routing`: only `salience.rs` (a sibling module) uses it directly, via
 // `ClassifierSalienceGate`.

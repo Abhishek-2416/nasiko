@@ -77,6 +77,28 @@ set (no stickiness at all then; every in-flow call is `Switch` and re-classifies
 - **Data in `llm-router/tests/data/classifier/`** so the hackathon scope (`llm-router/` plus
   tests) holds; a cargo test enforces the split policy.
 
+## 3b. Laya decisions (second iteration)
+
+- **In-process, not a sidecar.** The Python package and its `laya-serve` HTTP server were used
+  only to verify behaviour and record reference outputs; the shipped backend runs the
+  published ONNX export through `ort` with the checkpoint's tokenizer, so the judges' run
+  needs no Python and no manually started service. Cost: two workspace dependencies and a
+  run-time ONNX Runtime library (`load-dynamic`, so nothing is downloaded at build time).
+- **One rubric for both models** (`routing/rubric.rs`). The first Laya reference run used a
+  hand-typed variant of the complexity instruction and disagreed with the Rust port by 0.09
+  in probability; with the exact text the gap is 5e-5. The rubric is therefore exported from
+  the Rust source for any reference run, never retyped.
+- **Semaphore before queue.** A timed-out local inference cannot be cancelled, so the permit
+  is taken inside the deadline before `spawn_blocking`; the backlog is bounded by
+  `CLASSIFIER_MAX_CONCURRENCY` however many callers give up.
+- **Token-level truncation is reported, not hidden.** Laya's state budget is ~200 tokens
+  with this rubric; `BackendDiagnostics.input_truncated` carries it to the eval sidecar and
+  the UI.
+- **Temperature clamp follows the Python package**, not the TypeScript port (which uses the
+  shipped out-of-range `choice:11+` value raw). Irrelevant for 7 options, documented anyway.
+- **Defaults unchanged.** The 3 s timeout and 0.0 floor stay; RESULTS.md says what a Laya
+  deployment should set instead and why.
+
 ## 4. Alternatives considered and not taken
 
 - A `complexity`-aware tier policy (e.g. complexity ≥ 4 ⇒ never Tier3). Plausible, but it
@@ -86,3 +108,9 @@ set (no stickiness at all then; every in-flow call is `Switch` and re-classifies
   the brief asks to measure.
 - Ensembling two option orders per decision. Doubles cost per decision for an effect that
   should be measured first (`tests/jev_live.rs`).
+- A Python worker process managed by the router for Laya. Simpler to write, but it would
+  make a 2 GB PyTorch install a run-time requirement of the router and leave a second
+  process to supervise; the ONNX path removes both.
+- Exporting ONNX ourselves from the pinned safetensors. The published export is pinned,
+  checksummed and reproduces PyTorch to 5e-5, so re-exporting adds a torch dependency for no
+  measured gain.

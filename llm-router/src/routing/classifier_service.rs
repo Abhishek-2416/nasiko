@@ -35,6 +35,7 @@ use super::classifier::{
     RequestClassifier, warm_regex_tables,
 };
 use super::jev::JevClassifier;
+use super::laya::LayaClassifier;
 use crate::config::{ClassifierBackend, ClassifierConfig};
 
 /// Longest query the hosted path sends, in chars. Jev's state budget is 32k tokens; the
@@ -184,6 +185,8 @@ pub struct BackendStatus {
     pub model: Option<String>,
     /// Hosted endpoint in use (no credentials).
     pub endpoint: Option<String>,
+    /// Local model directory (Laya), whether or not it loaded.
+    pub model_path: Option<String>,
     pub timeout_ms: u64,
     pub min_confidence: f32,
     pub routing_seed: Option<u64>,
@@ -200,6 +203,8 @@ pub struct ClassifierService {
     routing_seed: Option<u64>,
     model: Option<String>,
     endpoint: Option<String>,
+    /// Laya: the bundle directory (configured, whether or not it loaded).
+    model_path: Option<String>,
     init_time: Duration,
     counters: Counters,
 }
@@ -228,15 +233,36 @@ impl ClassifierService {
     pub fn from_config(cfg: &ClassifierConfig) -> Self {
         let started = Instant::now();
         warm_regex_tables();
-        let (primary, init_error): (Option<Arc<dyn RequestClassifier>>, Option<String>) =
-            match cfg.backend {
-                ClassifierBackend::Regex => (None, None),
-                ClassifierBackend::Jev => match JevClassifier::new(cfg) {
-                    Ok(jev) => (Some(Arc::new(jev)), None),
-                    Err(e) => (None, Some(e.to_string())),
-                },
-            };
-        let hosted = cfg.backend != ClassifierBackend::Regex;
+        type Built = (
+            Option<Arc<dyn RequestClassifier>>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        );
+        let (primary, init_error, model_override, model_path): Built = match cfg.backend {
+            ClassifierBackend::Regex => (None, None, None, None),
+            ClassifierBackend::Jev => match JevClassifier::new(cfg) {
+                Ok(jev) => (Some(Arc::new(jev)), None, None, None),
+                Err(e) => (None, Some(e.to_string()), None, None),
+            },
+            // The local model is loaded here and only here: with any other backend the
+            // bundle is never opened and the runtime is never dynamically loaded.
+            ClassifierBackend::Laya => match LayaClassifier::new(cfg) {
+                Ok(laya) => {
+                    let version = laya.info().model_version.clone();
+                    let model_dir = laya.info().model_dir.display().to_string();
+                    let c: Arc<dyn RequestClassifier> = Arc::new(laya);
+                    (Some(c), None, Some(version), Some(model_dir))
+                }
+                Err(e) => (
+                    None,
+                    Some(e.to_string()),
+                    None,
+                    Some(cfg.model_path.clone()),
+                ),
+            },
+        };
+        let hosted = cfg.backend == ClassifierBackend::Jev;
         let service = Self {
             configured: cfg.backend,
             primary,
@@ -245,8 +271,9 @@ impl ClassifierService {
             timeout: Duration::from_millis(cfg.timeout_ms.max(1)),
             min_confidence: cfg.min_confidence.clamp(0.0, 1.0),
             routing_seed: cfg.routing_seed,
-            model: hosted.then(|| cfg.model.clone()),
+            model: model_override.or_else(|| hosted.then(|| cfg.model.clone())),
             endpoint: hosted.then(|| cfg.endpoint.clone()),
+            model_path,
             init_time: Duration::ZERO,
             counters: Counters::default(),
         };
@@ -295,6 +322,7 @@ impl ClassifierService {
             routing_seed,
             model: None,
             endpoint: None,
+            model_path: None,
             init_time: Duration::ZERO,
             counters: Counters::default(),
         }
@@ -330,6 +358,7 @@ impl ClassifierService {
             init_error: self.init_error.clone(),
             model: self.model.clone(),
             endpoint: self.endpoint.clone(),
+            model_path: self.model_path.clone(),
             timeout_ms: self.timeout.as_millis() as u64,
             min_confidence: self.min_confidence,
             routing_seed: self.routing_seed,
@@ -436,6 +465,8 @@ impl ClassifierService {
                         truncated,
                     );
                 }
+                let truncated =
+                    truncated || diagnostics.as_ref().is_some_and(|d| d.input_truncated);
                 let abstained =
                     self.min_confidence > 0.0 && classification.confidence < self.min_confidence;
                 if abstained {

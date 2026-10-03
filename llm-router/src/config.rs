@@ -208,6 +208,8 @@ pub enum ClassifierBackend {
     Regex,
     /// Jev (typesafe.ai) hosted System One model over HTTPS, with regex fallback.
     Jev,
+    /// Laya (Convai Innovations) local decision model via ONNX Runtime, with regex fallback.
+    Laya,
 }
 
 impl ClassifierBackend {
@@ -216,6 +218,7 @@ impl ClassifierBackend {
         match self {
             ClassifierBackend::Regex => "regex",
             ClassifierBackend::Jev => "jev",
+            ClassifierBackend::Laya => "laya",
         }
     }
 
@@ -225,8 +228,9 @@ impl ClassifierBackend {
         match s.trim().to_ascii_lowercase().as_str() {
             "" | "regex" => Ok(ClassifierBackend::Regex),
             "jev" => Ok(ClassifierBackend::Jev),
+            "laya" => Ok(ClassifierBackend::Laya),
             other => Err(format!(
-                "unknown classifier backend '{other}' (expected regex|jev)"
+                "unknown classifier backend '{other}' (expected regex|jev|laya)"
             )),
         }
     }
@@ -241,7 +245,7 @@ impl ClassifierBackend {
 ///
 /// | Var | Field | Default |
 /// |---|---|---|
-/// | `CLASSIFIER_BACKEND` | `backend` | `regex` |
+/// | `CLASSIFIER_BACKEND` | `backend` | `regex` (`jev` hosted, `laya` local) |
 /// | `CLASSIFIER_ENDPOINT` | `endpoint` | `https://api.typesafe.ai/v1/systemone` |
 /// | `CLASSIFIER_MODEL` | `model` | `jev-1.13.0` (a versioned id, not the moving alias) |
 /// | `TYPESAFE_API_KEY` | `api_key` | unset |
@@ -250,6 +254,9 @@ impl ClassifierBackend {
 /// | `CLASSIFIER_ROUTING_SEED` | `routing_seed` | unset (legacy entropy RNG for tier sampling) |
 /// | `CLASSIFIER_MAX_CONCURRENCY` | `max_concurrency` | `8` |
 /// | `CLASSIFIER_RETRIES` | `retries` | `0` (no retry in the routing hot path) |
+/// | `CLASSIFIER_MODEL_PATH` | `model_path` | unset (Laya: directory with `laya.onnx`, `laya.onnx.data`, `laya_config.json`, `tokenizer/`) |
+/// | `CLASSIFIER_ORT_DYLIB` (or `ORT_DYLIB_PATH`) | `ort_dylib` | unset (Laya: path to the ONNX Runtime shared library) |
+/// | `CLASSIFIER_THREADS` | `threads` | `0` = ONNX Runtime default (Laya intra-op threads) |
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassifierConfig {
     pub backend: ClassifierBackend,
@@ -277,6 +284,13 @@ pub struct ClassifierConfig {
     /// Extra attempts after a retryable failure (429/529/connection), each inside the same
     /// overall deadline.
     pub retries: u32,
+    /// Laya: directory holding the ONNX bundle. Only read when `backend == Laya`.
+    pub model_path: String,
+    /// Laya: path to `libonnxruntime.{so,dylib}` / `onnxruntime.dll`. Empty ⇒ `ort` resolves it
+    /// (`ORT_DYLIB_PATH`, then the default library name on the loader path).
+    pub ort_dylib: String,
+    /// Laya: ONNX Runtime intra-op threads; `0` keeps the runtime default.
+    pub threads: usize,
 }
 
 /// Jev's documented production endpoint.
@@ -296,6 +310,9 @@ impl Default for ClassifierConfig {
             routing_seed: None,
             max_concurrency: 8,
             retries: 0,
+            model_path: String::new(),
+            ort_dylib: String::new(),
+            threads: 0,
         }
     }
 }
@@ -323,6 +340,9 @@ impl ClassifierConfig {
                 .and_then(|v| v.trim().parse::<u64>().ok()),
             max_concurrency: env_usize("CLASSIFIER_MAX_CONCURRENCY", d.max_concurrency).max(1),
             retries: env_usize("CLASSIFIER_RETRIES", d.retries as usize).min(5) as u32,
+            model_path: env_first(&["CLASSIFIER_MODEL_PATH"], &d.model_path),
+            ort_dylib: env_first(&["CLASSIFIER_ORT_DYLIB", "ORT_DYLIB_PATH"], &d.ort_dylib),
+            threads: env_usize("CLASSIFIER_THREADS", d.threads),
         }
     }
 }
@@ -624,6 +644,11 @@ mod tests {
             ClassifierBackend::parse(" JEV "),
             Ok(ClassifierBackend::Jev)
         );
+        assert_eq!(
+            ClassifierBackend::parse("laya"),
+            Ok(ClassifierBackend::Laya)
+        );
+        assert_eq!(ClassifierBackend::Laya.as_str(), "laya");
         assert!(ClassifierBackend::parse("local").is_err());
     }
 

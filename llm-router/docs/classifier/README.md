@@ -1,16 +1,18 @@
 # Request classifier (`[classifier]`, P2)
 
 A pluggable request classifier behind the router's Level 3 tier selection: the regex
-vote-count classifier stays the default, and a hosted **Jev** (typesafe.ai) backend can be
-opted into through configuration, with regex fallback on any failure. This directory holds
-the contribution's docs; the code lives in `llm-router/src/routing/`.
+vote-count classifier stays the default, and two model backends can be opted into through
+configuration, each with regex fallback on any failure — **Jev** (typesafe.ai, hosted) and
+**Laya** (Convai Innovations, local, in-process ONNX). Both are asked the same rubric. This
+directory holds the contribution's docs; the code lives in `llm-router/src/routing/`.
 
 | Doc | What it covers |
 |---|---|
 | this file | setup, configuration, how to run the eval and the scorer, requirements matrix, limits |
 | [DECISIONS.md](DECISIONS.md) | request path trace, critique of the proposal, architecture decisions |
 | [DATASETS.md](DATASETS.md) | labelled data: provenance, label criteria, splits, leakage check |
-| [RESULTS.md](RESULTS.md) | measured results, what is and is not verified, runtime feasibility |
+| [RESULTS.md](RESULTS.md) | measured results for regex, Laya and (not run) Jev; what is and is not verified; runtime feasibility |
+| [LAYA.md](LAYA.md) | the local Laya backend: setup script, verified reference behaviour, parity, packaging obstacles |
 | [PR-core.md](PR-core.md) | the hackathon PR description (Track, how to run, model ids, results, limits) |
 
 ## Quick start
@@ -27,6 +29,16 @@ Jev (hosted, opt-in):
 
 ```sh
 CLASSIFIER_BACKEND=jev TYPESAFE_API_KEY=… \
+EVAL_SET=/tmp/classifier-eval.json OUT=/tmp/classifier-out.jsonl \
+cargo run --release -p nasiko-llm-router --example classifier_eval
+```
+
+Laya (local, opt-in; one-time ~1.7 GB download, no key):
+
+```sh
+llm-router/scripts/laya-setup.sh                     # fetches the pinned ONNX bundle + onnxruntime into ./.laya
+CLASSIFIER_BACKEND=laya CLASSIFIER_MODEL_PATH=$PWD/.laya/model \
+CLASSIFIER_ORT_DYLIB=$PWD/.laya/onnxruntime/lib/libonnxruntime.1.28.0.dylib \
 EVAL_SET=/tmp/classifier-eval.json OUT=/tmp/classifier-out.jsonl \
 cargo run --release -p nasiko-llm-router --example classifier_eval
 ```
@@ -53,7 +65,7 @@ The host server, the standalone `llm-router` binary and the eval example all bui
 
 | Var | Default | Meaning |
 |---|---|---|
-| `CLASSIFIER_BACKEND` | `regex` | `regex` or `jev`. Unknown values log a warning and keep regex. |
+| `CLASSIFIER_BACKEND` | `regex` | `regex`, `jev` (hosted) or `laya` (local). Unknown values log a warning and keep regex. Only the selected model backend is initialized. |
 | `CLASSIFIER_ENDPOINT` | `https://api.typesafe.ai/v1/systemone` | The only URL the key is ever sent to. Must be `https://` (plain `http://` only for loopback). Redirects are never followed. |
 | `CLASSIFIER_MODEL` | `jev-1.13.0` | Versioned model id. The response's own `model` is recorded per call. `jev-latest` works but is a moving alias and not reproducible. |
 | `TYPESAFE_API_KEY` | unset | Required for `jev`. Redacted from `Debug`, logs, errors and payloads. |
@@ -62,8 +74,12 @@ The host server, the standalone `llm-router` binary and the eval example all bui
 | `CLASSIFIER_ROUTING_SEED` | unset | When set, tier sampling is seeded from `(seed, provider, request_type, query, learned cells)` so identical state picks the same tier. Unset keeps the legacy entropy RNG. |
 | `CLASSIFIER_MAX_CONCURRENCY` | `8` | In-flight hosted calls; extra callers wait within the deadline. |
 | `CLASSIFIER_RETRIES` | `0` | Extra attempts after 429/529/5xx/connect failures, inside the same deadline. Keep `0` in the routing hot path. |
+| `CLASSIFIER_MODEL_PATH` | unset | Laya: directory with `laya.onnx`, `laya.onnx.data`, `laya_config.json`, `tokenizer/` (from `scripts/laya-setup.sh`). |
+| `CLASSIFIER_ORT_DYLIB` (or `ORT_DYLIB_PATH`) | unset | Laya: the ONNX Runtime shared library to load at run time. |
+| `CLASSIFIER_THREADS` | `0` | Laya: ONNX Runtime intra-op threads; `0` = runtime default. |
 
-With defaults nothing is contacted, downloaded or required.
+With defaults nothing is contacted, downloaded or required. For Laya, `CLASSIFIER_TIMEOUT_MS`
+around `6000` fits CPU latency better than the hosted-oriented default (see RESULTS.md).
 
 ## How it fits the router
 
@@ -80,6 +96,9 @@ query (+ bounded context) ──► ClassifierService ──► Classification {
   `routing/classifier_service.rs`. Every caller — router, eval, UI preview — goes through it.
 - `JevClassifier`: `routing/jev.rs`. One `POST` with the query/context as `state` and two
   questions (Choice over the seven types, Score over the five levels).
+- `LayaClassifier`: `routing/laya.rs`. The same two questions, built into the model's token
+  sequence and run in-process through ONNX Runtime; see LAYA.md.
+- The shared rubric both model backends send: `routing/rubric.rs` (`RUBRIC_VERSION`).
 - Context extraction: `routing/context.rs` (chat IR) and `handlers/responses.rs`
   (Responses `input`), both via `routing::classifier_context`.
 - Router integration: `routing/mod.rs::route_model` Level 3; `LlmRouterCtx.classifier`.
@@ -96,9 +115,10 @@ reach it. A `NoopCache` (no `REDIS_URL`) provides no stickiness, exactly as befo
 - Regex reports fixed, **uncalibrated** values: complexity 3; confidence 0.5 when a pattern
   voted, 0.3 when `General` was the fallthrough. They let regex rows share the contract;
   they are not probabilities of correctness. The scorer measures the ECE they produce.
-- Jev's public confidence is the probability it assigns to the chosen request type. Jev's
-  own `confidence` field is a spread statistic and is kept separately as
-  `vendor_type_confidence`. Complexity has no confidence of its own.
+- Jev's and Laya's public confidence is the probability the model assigns to the chosen
+  request type (Laya calls this `answer_confidence`, the quantity its calibration targets).
+  Each vendor's entropy/spread statistic is kept separately as `vendor_type_confidence`.
+  Complexity has no confidence of its own.
 - With `CLASSIFIER_MIN_CONFIDENCE > 0`, a hosted answer below the floor is an abstention:
   the router serves the agent's configured model (`RouteSource::LowConfidence`) and caches
   that for the conversation with no tier/request type, so later turns are sticky but no
@@ -109,8 +129,8 @@ reach it. A `NoopCache` (no `REDIS_URL`) provides no stickiness, exactly as befo
 
 ### Complexity
 
-Jev's Score question has five 0-based levels mirroring the rubric. The served level is the
-**mode** of the distribution (+1), ties to the lower level. The probability-weighted
+The Score question has five 0-based levels mirroring the rubric (identical text for Jev and
+Laya). The served level is the **mode** of the distribution (+1), ties to the lower level. The probability-weighted
 expected level is recorded as `complexity_expected` so the rounding rule can be compared
 offline from one run. Complexity is predicted and evaluated but does not change tier
 selection and is not in the bandit key.
@@ -140,7 +160,11 @@ selection and is not in the bandit key.
 | Eval contract: no args, `EVAL_SET`/`OUT`, one row per case, exit codes | `examples/classifier_eval.rs`, `classifier_eval::read_eval_cases` | `read_eval_cases_reads_only_inference_fields_and_rejects_bad_input` |
 | Labelled own data, documented criteria, no leakage across splits | `tests/data/classifier/*.json`, `split-manifest.json` | `tests/classifier_data.rs` |
 | Scorer: accuracy, per-class, confusion, macro F1, ECE, complexity, latency, fallbacks, selective accuracy, repeatability | `classifier_eval::metrics`, `examples/classifier_report.rs` | `score_computes_accuracy_f1_confusion_ece_complexity_and_latency_by_hand`, `semantic_diff_ignores_latency_and_flags_label_changes` |
-| Live checks opt-in; CI needs no key | `tests/jev_live.rs` (`#[ignore]`) | — |
+| Laya: same contract, same rubric, lazy init only when selected | `routing/laya.rs`, `ClassifierService::from_config` arm | `from_config_laya_without_a_bundle_is_an_init_error_and_loads_nothing` |
+| Laya: sequence layout, option/head/state budgets, `[MASK]` scrubbing, collation, temperature buckets + clamp, softmax, conversion, entropy confidence | pure functions in `routing/laya.rs` | `sequence_layout_follows_the_reference_template`, `state_is_truncated_to_the_remaining_room_and_reported`, `oversized_options_are_shrunk_evenly…`, `collate_right_pads_rows_and_markers`, `temperature_buckets_and_clamp_match_the_reference`, `decode_applies_temperature_softmax_and_rejects_bad_logits` |
+| Laya: missing/corrupt bundle, bounded blocking queue, timeout fallback | `LayaClassifier::new`, semaphore-before-queue | `missing_or_corrupt_bundle_is_an_init_error_without_touching_the_runtime`, `local_inference_is_repeatable_and_times_out_into_regex` (opt-in) |
+| Laya: parity with the PyTorch reference | `tests/data/classifier/laya-reference-public.json` | `local_bundle_reproduces_the_pytorch_reference_on_the_public_sample` (opt-in) |
+| Live/local checks opt-in; CI needs no key or model | `tests/jev_live.rs`, `tests/laya_local.rs` (`#[ignore]`) | — |
 
 Mandatory items above are all implemented. **Proposed decisions** (ours, not the brief's):
 abstention semantics, the mode conversion rule, the seeded RNG derivation, the fixed regex
@@ -151,8 +175,14 @@ DECISIONS.md for the reasoning and RESULTS.md for what remains unverified.
 ## Known limits and unsupported cases
 
 - **Live Jev results are unverified in this checkout**: no `TYPESAFE_API_KEY` was available,
-  so every hosted number in RESULTS.md is marked as not measured. The adapter is verified
-  against the documented contract with a local HTTP mock only.
+  so every hosted number in RESULTS.md is marked "not run — credentials/billing unavailable".
+  The adapter is verified against the documented contract with a local HTTP mock only.
+- **Laya is slow on CPU and memory-hungry**: ~0.85 s p50 per decision and ~2 GB resident
+  here; its 512-token window sees only ~200 tokens of query+context (reported per call as
+  truncation). It is clearly better than regex on these sets but misreads technical writing
+  as code and reasoning as explanation; see RESULTS.md.
+- Two new workspace dependencies (`ort`, `tokenizers`) and a run-time ONNX Runtime library
+  come with Laya; see LAYA.md "Packaging obstacles".
 - Jev documents no seed/temperature; cross-run repeatability is measured by
   `tests/jev_live.rs` when a key is present, not assumed.
 - Jev 1.13 is documented as sensitive to option order and to unrelated context; the

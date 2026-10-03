@@ -308,6 +308,10 @@ pub struct BackendDiagnostics {
     pub output_tokens: Option<u64>,
     /// HTTP attempts made for this answer (1 = no retry).
     pub attempts: u32,
+    /// The backend cut the input to its own window (e.g. a local model's token budget), as
+    /// opposed to the service's character caps.
+    #[serde(default)]
+    pub input_truncated: bool,
 }
 
 /// A backend answer plus optional diagnostics.
