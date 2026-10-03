@@ -419,17 +419,26 @@ export const copy = {
   // Request classification ([classifier] companion)
   classifierTitle: 'Request classification',
   classifierIntro:
-    'How the router reads a request before it picks a tier. Regex is the default; Jev is an opt-in hosted backend with regex as its fallback.',
+    'How the router reads a request before it picks a tier. Regex is the default; Jev (hosted) and Laya (local) are opt-in backends with regex as their fallback.',
   classifierStatusTitle: 'Backend',
   classifierLoading: 'Reading the classifier status',
-  classifierBackendNames: { regex: 'Regex', jev: 'Jev' } as Record<string, string>,
+  classifierBackendNames: { regex: 'Regex', jev: 'Jev', laya: 'Laya' } as Record<string, string>,
   classifierConfigured: (name: string) => `Configured: ${name}`,
   classifierEffective: (name: string) => `Answers with: ${name}`,
   classifierRegexDefault: 'Regex (default)',
-  classifierJevExperimental: 'Jev (experimental)',
+  classifierJevExperimental: 'Jev (hosted, experimental)',
+  classifierLayaExperimental: 'Laya (local, experimental)',
+  classifierModelPath: (path: string) => `Model files ${path}`,
+  classifierLayaReady: 'Local model loaded',
+  classifierLayaSetupTitle: 'To turn on Laya',
+  classifierLayaSetup:
+    'Run llm-router/scripts/laya-setup.sh, then set CLASSIFIER_BACKEND=laya, CLASSIFIER_MODEL_PATH and CLASSIFIER_ORT_DYLIB on the server and restart it. No account or key is needed; the bundle is about 1.7 GB.',
+  classifierOtherBackends: (names: string) => `Not configured here, so not run: ${names}.`,
   classifierUnavailable:
     'The configured backend can’t start, so every request falls back to regex.',
   classifierSetupTitle: 'To turn on Jev',
+  classifierSetupBoth:
+    'Only one model backend runs per deployment; set CLASSIFIER_BACKEND to jev or laya.',
   classifierSetup:
     'Set CLASSIFIER_BACKEND=jev and TYPESAFE_API_KEY on the server, then restart it. Optional: CLASSIFIER_MODEL, CLASSIFIER_TIMEOUT_MS, CLASSIFIER_MIN_CONFIDENCE.',
   classifierSetupDocs: 'Details are in llm-router/docs/classifier/README.md.',
@@ -467,6 +476,10 @@ export const copy = {
   classifierDifficultyOf: (n: number) => `${n} of 5`,
   classifierConfidence: 'Confidence',
   classifierConfidenceHosted: (pct: number) => `${pct}% · probability the model gave this type`,
+  classifierCostLocal: (n: number) =>
+    `${n} input tokens · local inference, no API fee (CPU time only)`,
+  classifierTruncatedWindow:
+    'The request did not fit the local model’s 512-token window; it saw a prefix.',
   classifierConfidenceRegex: (value: string) => `${value} · fixed placeholder, not calibrated`,
   classifierLatency: 'Decision latency',
   classifierLatencyValue: (ms: string) => `${ms} ms, including any fallback`,

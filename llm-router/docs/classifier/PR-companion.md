@@ -9,12 +9,13 @@ scope** (touches `server/` and `ui/`); the core PR stands alone.
   `POST /api/llm-router/classifier/preview` (superuser, rate limited, side-effect free) in
   `server/src/llm_router/classifier.rs`, registered in OpenAPI; the preview reuses the
   router's own `ClassifierService` instance.
-- A **Classification** tab on the Router page: effective backend and setup guidance, a
-  query/context form with an explicit Test button, per-backend result cards next to the
-  regex baseline, and every loading/invalid/unavailable/unauthorized/timeout/error state.
-  Mock variants for the regex-default, unconfigured and failing deployments.
+- A **Classification** tab on the Router page: effective backend (Regex, Jev or Laya) with
+  availability and setup guidance, a query/context form with an explicit Test button,
+  per-backend result cards next to the regex baseline, unconfigured backends shown as not
+  run, and every loading/invalid/unavailable/unauthorized/timeout/error state. Mock variants
+  for the regex-default, Jev-unconfigured, Laya-loaded, Laya-missing and failing deployments.
 - Regenerated `schema.gen.ts` (classifier hunks only), MSW handlers, copy, error rules,
-  14 component tests with axe, one Playwright case.
+  16 component tests with axe, one Playwright case.
 
 ## Checks
 

@@ -208,6 +208,8 @@ export interface ClassifierDiagnostics {
   input_tokens: number | null
   output_tokens: number | null
   attempts: number
+  /** The backend cut the input to its own window (Laya's 512-token budget). */
+  input_truncated?: boolean
 }
 
 export type ClassifierPreviewResult = Omit<S['PreviewResult'], 'diagnostics'> & {

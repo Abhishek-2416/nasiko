@@ -50,8 +50,9 @@ describe('status', () => {
     expect(screen.getByText(copy.classifierFloor(0.35))).toBeInTheDocument()
     expect(screen.getByText(/128 classified since start/)).toBeInTheDocument()
     expect(document.body.textContent).not.toMatch(/sk-|TYPESAFE_API_KEY=/)
-    // A working hosted backend shows no setup guidance.
+    // A working hosted backend shows no setup guidance, and names the backend not configured here.
     expect(screen.queryByText(copy.classifierSetupTitle + ':')).toBeNull()
+    expect(screen.getByText(copy.classifierOtherBackends('Laya'))).toBeInTheDocument()
   })
 
   it('on the regex default, says so and shows the setup path to Jev', async () => {
@@ -60,6 +61,8 @@ describe('status', () => {
     expect(screen.getByText(copy.classifierRegexDefault)).toBeInTheDocument()
     expect(screen.getByText(copy.classifierEffective('Regex'))).toBeInTheDocument()
     expect(screen.getByText(SETUP)).toBeInTheDocument()
+    expect(screen.getByText(/laya-setup\.sh/)).toBeInTheDocument()
+    expect(screen.getByText(copy.classifierOtherBackends('Jev, Laya'))).toBeInTheDocument()
     // No backend picker when there is nothing to pick between.
     expect(screen.queryByLabelText(copy.classifierBackendPick)).toBeNull()
   })
@@ -71,6 +74,39 @@ describe('status', () => {
     expect(screen.getByText(copy.classifierEffective('Regex'))).toBeInTheDocument()
     expect(screen.getByTestId('classifier-init-error')).toHaveTextContent(/TYPESAFE_API_KEY/)
     expect(screen.getByText(SETUP)).toBeInTheDocument()
+  })
+
+  it('shows a loaded local Laya model with its files and no API fee, and names the unrun backend', async () => {
+    configureMocks({ routerVariants: ['router-classifier-laya'] })
+    await open()
+    expect(screen.getByText(copy.classifierLayaExperimental)).toBeInTheDocument()
+    expect(screen.getByText(copy.classifierLayaReady)).toBeInTheDocument()
+    expect(screen.getByText(copy.classifierEffective('Laya'))).toBeInTheDocument()
+    expect(screen.getByText(/Model files \/srv\/nasiko\/\.laya\/model/)).toBeInTheDocument()
+    expect(screen.queryByText(/Endpoint /)).toBeNull()
+    expect(screen.getByText(copy.classifierOtherBackends('Jev'))).toBeInTheDocument()
+    await userEvent.type(query(), 'Design a rate limiter for a multi-tenant API')
+    await userEvent.click(testButton())
+    await results()
+    const local = card(copy.classifierResultConfigured('Laya'))
+    expect(local.getByText(copy.classifierAnsweredBy('Laya'))).toBeInTheDocument()
+    expect(local.getByText(/local inference, no API fee/)).toBeInTheDocument()
+    expect(local.getByText(/receptron\/laya-onnx@68f27df/)).toBeInTheDocument()
+  })
+
+  it('a Laya deployment whose bundle is missing says so, shows the setup script, and falls back', async () => {
+    configureMocks({ routerVariants: ['router-classifier-laya-missing'] })
+    await open()
+    expect(screen.getByText(copy.classifierEffective('Regex'))).toBeInTheDocument()
+    expect(screen.getByTestId('classifier-init-error')).toHaveTextContent(/laya\.onnx.*missing/)
+    expect(screen.getByText(/laya-setup\.sh, then set CLASSIFIER_BACKEND=laya/)).toBeInTheDocument()
+    expect(screen.queryByText(copy.classifierLayaReady)).toBeNull()
+    await userEvent.type(query(), 'what is the capital of France?')
+    await userEvent.click(testButton())
+    await results()
+    const local = card(copy.classifierResultConfigured('Laya'))
+    expect(local.getByText(copy.classifierAnsweredBy('Regex'))).toBeInTheDocument()
+    expect(local.getByText(/Fell back to regex: backend not configured/)).toBeInTheDocument()
   })
 
   it('shows a section error with Retry when the status read fails', async () => {

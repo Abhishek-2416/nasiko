@@ -97,6 +97,8 @@ pub struct ClassifierStatusResponse {
     pub model: Option<String>,
     /// Hosted endpoint host (no path, no credentials; `null` for regex).
     pub endpoint_host: Option<String>,
+    /// Local model directory (Laya), whether or not it loaded; `null` otherwise.
+    pub model_path: Option<String>,
     pub timeout_ms: u64,
     /// Below this request-type probability a hosted answer is an abstention; `0` = off.
     pub min_confidence: f32,
@@ -146,6 +148,7 @@ fn status_response(
             .as_deref()
             .and_then(|e| reqwest::Url::parse(e).ok())
             .and_then(|u| u.host_str().map(str::to_string)),
+        model_path: status.model_path.clone(),
         timeout_ms: status.timeout_ms,
         min_confidence: status.min_confidence,
         routing_seed_set: status.routing_seed.is_some(),
@@ -185,7 +188,9 @@ pub(crate) async fn classifier_status(
     )
 }
 
-/// Which backend a preview runs through.
+/// Which backend a preview runs through. Only the deployment-configured model backend is
+/// loaded in a process, so the choice is "that one" or the regex baseline; a backend that is
+/// not configured cannot be previewed and the UI shows it as unrun.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PreviewBackend {
@@ -470,10 +475,37 @@ mod tests {
         assert_eq!(d["effective_backend"], "jev");
         assert_eq!(d["model"], "jev-1.13.0");
         assert_eq!(d["endpoint_host"], "api.typesafe.ai");
+        assert!(d["model_path"].is_null());
         assert_eq!(d["preview_allowed"], false);
         assert_eq!(d["stats"]["calls"], 0);
         assert!(!text.contains("sk-live"), "key leaked: {text}");
         assert!(!text.contains("api_key"));
+    }
+
+    #[tokio::test]
+    async fn status_reports_a_laya_deployment_whose_bundle_is_missing() {
+        let cfg = ClassifierConfig {
+            backend: ClassifierBackend::Laya,
+            model_path: "/nonexistent/laya".into(),
+            ..Default::default()
+        };
+        let preview = Arc::new(ClassifierPreview::new(Arc::new(
+            ClassifierService::from_config(&cfg),
+        )));
+        let base = serve(preview, true, 10).await;
+        let (status, json, _) = get_status(&base).await;
+        assert_eq!(status, 200);
+        let d = &json["data"];
+        assert_eq!(d["configured_backend"], "laya");
+        assert_eq!(d["effective_backend"], "regex");
+        assert_eq!(d["model_path"], "/nonexistent/laya");
+        assert!(d["endpoint_host"].is_null());
+        assert!(d["init_error"].as_str().unwrap().contains("laya.onnx"));
+        let (status, json, _) =
+            post(&base, json!({"query": "what is the capital of France?"})).await;
+        assert_eq!(status, 200);
+        assert_eq!(json["data"]["result"]["disposition"], "fallback");
+        assert_eq!(json["data"]["result"]["fallback_reason"], "init");
     }
 
     #[tokio::test]

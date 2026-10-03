@@ -2434,6 +2434,8 @@ export interface components {
             min_confidence: number;
             /** @description Hosted model id requested (`null` for regex). */
             model?: string | null;
+            /** @description Local model directory (Laya), whether or not it loaded; `null` otherwise. */
+            model_path?: string | null;
             /** @description Whether the caller may run previews (superuser). */
             preview_allowed: boolean;
             routing_seed_set: boolean;
@@ -2971,7 +2973,9 @@ export interface components {
             has_next_page: boolean;
         };
         /**
-         * @description Which backend a preview runs through.
+         * @description Which backend a preview runs through. Only the deployment-configured model backend is
+         *     loaded in a process, so the choice is "that one" or the regex baseline; a backend that is
+         *     not configured cannot be previewed and the UI shows it as unrun.
          * @enum {string}
          */
         PreviewBackend: "configured" | "regex";

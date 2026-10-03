@@ -702,7 +702,7 @@ export function usageByAgent(
 // ── Request classifier ([classifier] companion) ──────────────────────────────────────────────────────
 
 /** The deployment the mock answers as: Jev configured and working, regex only, or Jev asked for without a key. */
-export type ClassifierMode = 'jev' | 'regex' | 'unconfigured'
+export type ClassifierMode = 'jev' | 'regex' | 'unconfigured' | 'laya' | 'laya-missing'
 
 const CLASSIFIER_TYPES = [
   'code_generation',
@@ -715,32 +715,43 @@ const CLASSIFIER_TYPES = [
 ] as const
 
 /** llm_router/classifier.rs `ClassifierStatusResponse`. Counters are fixed: the mock has no routing to count. */
+const LAYA_VERSION = 'receptron/laya-onnx@68f27df (export of convaiinnovations/laya@55cf4c4)'
+const LAYA_PATH = '/srv/nasiko/.laya/model'
+const LAYA_MISSING =
+  "classifier backend not initialized: Laya bundle is incomplete: '/srv/nasiko/.laya/model/laya.onnx' is missing (run llm-router/scripts/laya-setup.sh)"
+
 export function classifierStatus(mode: ClassifierMode, superuser: boolean): ClassifierStatus {
-  const hosted = mode !== 'regex'
+  const jev = mode === 'jev' || mode === 'unconfigured'
+  const laya = mode === 'laya' || mode === 'laya-missing'
+  const working = mode === 'jev' || mode === 'laya'
+  const configured = jev ? 'jev' : laya ? 'laya' : 'regex'
+  const zero = { init: 0, inference: 0, invalid_output: 0, network: 0, timeout: 0 }
   return {
-    configured_backend: hosted ? 'jev' : 'regex',
-    effective_backend: mode === 'jev' ? 'jev' : 'regex',
+    configured_backend: configured,
+    effective_backend: working ? configured : 'regex',
     init_error:
       mode === 'unconfigured'
         ? 'TYPESAFE_API_KEY is not set (required for CLASSIFIER_BACKEND=jev)'
-        : null,
-    model: hosted ? 'jev-1.13.0' : null,
-    endpoint_host: hosted ? 'api.typesafe.ai' : null,
+        : mode === 'laya-missing'
+          ? LAYA_MISSING
+          : null,
+    model: jev ? 'jev-1.13.0' : mode === 'laya' ? LAYA_VERSION : null,
+    endpoint_host: jev ? 'api.typesafe.ai' : null,
+    model_path: laya ? LAYA_PATH : null,
     timeout_ms: 3000,
-    min_confidence: mode === 'jev' ? 0.35 : 0,
+    min_confidence: working ? 0.35 : 0,
     routing_seed_set: false,
     preview_allowed: superuser,
     stats: {
       calls: 128,
-      primary_ok: mode === 'jev' ? 117 : 0,
-      abstained: mode === 'jev' ? 4 : 0,
-      fallback_total: mode === 'jev' ? 7 : mode === 'unconfigured' ? 128 : 0,
-      fallbacks:
-        mode === 'jev'
-          ? { init: 0, inference: 1, invalid_output: 0, network: 2, timeout: 4 }
-          : mode === 'unconfigured'
-            ? { init: 128, inference: 0, invalid_output: 0, network: 0, timeout: 0 }
-            : { init: 0, inference: 0, invalid_output: 0, network: 0, timeout: 0 },
+      primary_ok: working ? 117 : 0,
+      abstained: working ? 4 : 0,
+      fallback_total: working ? 7 : mode === 'regex' ? 0 : 128,
+      fallbacks: working
+        ? { init: 0, inference: 1, invalid_output: 0, network: 2, timeout: 4 }
+        : mode === 'regex'
+          ? zero
+          : { ...zero, init: 128 },
     },
   }
 }
@@ -784,8 +795,12 @@ function regexResult(query: string): ClassifierPreviewResult {
   }
 }
 
-/** A plausible hosted answer: a difficulty from the length, a type from richer cues, and a distribution around it. */
-function hostedResult(query: string, context: string | null): ClassifierPreviewResult {
+/** A plausible model answer: a difficulty from the length, a type from richer cues, and a distribution around it. */
+function hostedResult(
+  query: string,
+  context: string | null,
+  backend: 'jev' | 'laya',
+): ClassifierPreviewResult {
   const q = query.toLowerCase()
   const cues: [RegExp, string][] = [
     [/\b(fix|typo|rename|implement|write|add|refactor|port|migrate)\b/, 'code_generation'],
@@ -813,24 +828,26 @@ function hostedResult(query: string, context: string | null): ClassifierPreviewR
   cx[Math.max(0, level - 2)] += 0.1
   const expected = cx.reduce((acc, p, i) => acc + p * (i + 1), 0)
   const abstained = top < 0.7
+  const local = backend === 'laya'
   return {
-    answered_by: 'jev',
+    answered_by: backend,
     disposition: abstained ? 'abstained' : 'primary',
     request_type: type,
     complexity: level,
     confidence: Number(top.toFixed(3)),
-    latency_us: 180_000 + (h % 220_000),
-    input_truncated: query.length > 6000,
+    latency_us: local ? 380_000 + (h % 400_000) : 180_000 + (h % 220_000),
+    input_truncated: local ? words > 180 : query.length > 6000,
     diagnostics: {
-      model_version: 'jev-1.13.0',
+      model_version: local ? LAYA_VERSION : 'jev-1.13.0',
       type_probabilities: probs.map(([t, p]) => [t, Number(p.toFixed(3))]),
       complexity_probabilities: cx,
       complexity_expected: Number(expected.toFixed(2)),
       vendor_type_confidence: Number((top * 0.9).toFixed(3)),
       vendor_complexity_confidence: 0.61,
       input_tokens: 540 + Math.ceil((query.length + (context?.length ?? 0)) / 4),
-      output_tokens: 38,
+      output_tokens: local ? 0 : 38,
       attempts: 1,
+      input_truncated: local ? words > 180 : false,
     },
   }
 }
@@ -843,26 +860,23 @@ export function classifierPreview(
   backend: 'configured' | 'regex',
 ): ClassifierPreview {
   const baseline = regexResult(query)
-  const unconfigured = mode === 'unconfigured'
+  const status = classifierStatus(mode, true)
   const result: ClassifierPreviewResult =
     backend === 'regex' || mode === 'regex'
       ? baseline
-      : unconfigured
+      : status.init_error
         ? {
             ...baseline,
             disposition: 'fallback',
             fallback_reason: 'init',
-            fallback_detail:
-              'classifier backend not initialized: TYPESAFE_API_KEY is not set (required for CLASSIFIER_BACKEND=jev)',
+            fallback_detail: `classifier backend not initialized: ${status.init_error}`,
           }
-        : hostedResult(query, context)
+        : hostedResult(query, context, mode === 'laya' ? 'laya' : 'jev')
   return {
     backend,
-    configured_backend: mode === 'regex' ? 'regex' : 'jev',
+    configured_backend: status.configured_backend,
     result,
     baseline,
-    init_error: unconfigured
-      ? 'TYPESAFE_API_KEY is not set (required for CLASSIFIER_BACKEND=jev)'
-      : null,
+    init_error: status.init_error,
   }
 }

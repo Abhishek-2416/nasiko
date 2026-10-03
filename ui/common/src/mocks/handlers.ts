@@ -164,7 +164,8 @@ export const CHAT_PAGE_VARIANTS = [
  * - `router-legacy`: configs made elsewhere (openrouter, a missing saved key, a deleted custom provider, off-catalog models).
  * - `router-budgets-empty` / `router-budgets-fail`: no budgets / every /api/budgets read answers 500 (R2).
  * - `router-classifier-regex` / `router-classifier-unconfigured` / `router-classifier-fail`: the deployment runs the
- *   regex default / asks for Jev without a key (every answer a counted fallback) / the preview answers 504.
+ *   regex default / asks for Jev without a key (every answer a counted fallback) / the preview answers 504;
+ *   `router-classifier-laya` / `router-classifier-laya-missing`: the local Laya bundle loaded / is missing on disk.
  */
 export const ROUTER_PAGE_VARIANTS = [
   'router-empty',
@@ -182,6 +183,8 @@ export const ROUTER_PAGE_VARIANTS = [
   'router-classifier-regex',
   'router-classifier-unconfigured',
   'router-classifier-fail',
+  'router-classifier-laya',
+  'router-classifier-laya-missing',
 ] as const
 /** Page variants combine (read through hasVariant) instead of taking the single degraded-state slot. */
 const PAGE_VARIANTS: readonly string[] = [...CHAT_PAGE_VARIANTS, ...ROUTER_PAGE_VARIANTS]
@@ -1716,6 +1719,8 @@ function routed(fn: () => Response, superuserOnly = false): Response {
 function classifierMode(): ClassifierMode {
   if (hasVariant('router-classifier-regex')) return 'regex'
   if (hasVariant('router-classifier-unconfigured')) return 'unconfigured'
+  if (hasVariant('router-classifier-laya')) return 'laya'
+  if (hasVariant('router-classifier-laya-missing')) return 'laya-missing'
   return 'jev'
 }
 

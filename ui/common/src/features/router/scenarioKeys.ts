@@ -19,4 +19,6 @@ export const ROUTER_VARIANT_KEYS = [
   'router-classifier-regex',
   'router-classifier-unconfigured',
   'router-classifier-fail',
+  'router-classifier-laya',
+  'router-classifier-laya-missing',
 ] as const

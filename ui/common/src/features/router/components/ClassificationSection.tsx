@@ -78,15 +78,25 @@ export function ClassificationSection({
 function StatusPanel({ status }: { status: ClassifierStatus }) {
   const configured = backendName(status.configured_backend)
   const effective = backendName(status.effective_backend)
-  const hosted = status.configured_backend !== 'regex'
+  const experimental = status.configured_backend !== 'regex'
+  const local = status.configured_backend === 'laya'
   const degraded = status.effective_backend !== status.configured_backend
+  const others = ['jev', 'laya']
+    .filter((b) => b !== status.configured_backend)
+    .map(backendName)
+    .join(', ')
   return (
     <div className="space-y-2 rounded-lg border border-border bg-card p-4 text-sm">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-sm font-semibold">{copy.classifierStatusTitle}</h3>
-        <Badge variant={hosted ? 'secondary' : 'outline'}>
-          {hosted ? copy.classifierJevExperimental : copy.classifierRegexDefault}
+        <Badge variant={experimental ? 'secondary' : 'outline'}>
+          {local
+            ? copy.classifierLayaExperimental
+            : experimental
+              ? copy.classifierJevExperimental
+              : copy.classifierRegexDefault}
         </Badge>
+        {local && !degraded ? <Badge variant="outline">{copy.classifierLayaReady}</Badge> : null}
       </div>
       <ul className="grid gap-x-6 gap-y-1 text-xs sm:grid-cols-2">
         <li>{copy.classifierConfigured(configured)}</li>
@@ -95,6 +105,9 @@ function StatusPanel({ status }: { status: ClassifierStatus }) {
         </li>
         {status.model ? <li>{copy.classifierModel(status.model)}</li> : null}
         {status.endpoint_host ? <li>{copy.classifierEndpoint(status.endpoint_host)}</li> : null}
+        {status.model_path ? (
+          <li className="break-all">{copy.classifierModelPath(status.model_path)}</li>
+        ) : null}
         <li>{copy.classifierTimeout(status.timeout_ms)}</li>
         <li>{copy.classifierFloor(status.min_confidence)}</li>
         {status.routing_seed_set ? <li>{copy.classifierSeed}</li> : null}
@@ -112,20 +125,39 @@ function StatusPanel({ status }: { status: ClassifierStatus }) {
           <Warn testId="classifier-init-error">
             {copy.classifierUnavailable} {status.init_error}
           </Warn>
-          <Setup />
+          <Setup backend={status.configured_backend} />
         </div>
-      ) : !hosted ? (
-        <Setup />
+      ) : !experimental ? (
+        <Setup backend="regex" />
       ) : null}
+      <p className="text-xs text-muted-foreground">{copy.classifierOtherBackends(others)}</p>
     </div>
   )
 }
 
-function Setup() {
+/** Setup guidance for the backend that is configured but unusable, or for both when on regex. */
+function Setup({ backend }: { backend: string }) {
+  const jev = (
+    <>
+      <span className="font-medium text-foreground">{copy.classifierSetupTitle}:</span>{' '}
+      {copy.classifierSetup}
+    </>
+  )
+  const laya = (
+    <>
+      <span className="font-medium text-foreground">{copy.classifierLayaSetupTitle}:</span>{' '}
+      {copy.classifierLayaSetup}
+    </>
+  )
   return (
     <p className="text-xs text-muted-foreground">
-      <span className="font-medium text-foreground">{copy.classifierSetupTitle}:</span>{' '}
-      {copy.classifierSetup} {copy.classifierSetupDocs}
+      {backend === 'laya' ? laya : backend === 'jev' ? jev : null}
+      {backend === 'regex' ? (
+        <>
+          {jev} {laya} {copy.classifierSetupBoth}
+        </>
+      ) : null}{' '}
+      {copy.classifierSetupDocs}
     </p>
   )
 }
@@ -312,6 +344,7 @@ function ResultCard({
   initError?: string | null
 }) {
   const hostedAnswer = result.disposition === 'primary' || result.disposition === 'abstained'
+  const local = result.answered_by === 'laya'
   const fellBack = result.disposition === 'fallback'
   const d = result.diagnostics
   return (
@@ -362,7 +395,9 @@ function ResultCard({
         <dd className="tabular-nums">
           {hostedAnswer
             ? d?.input_tokens != null
-              ? copy.classifierCostTokens(d.input_tokens)
+              ? local
+                ? copy.classifierCostLocal(d.input_tokens)
+                : copy.classifierCostTokens(d.input_tokens)
               : copy.classifierCostUnavailable
             : copy.classifierCostNone}
         </dd>
@@ -372,7 +407,9 @@ function ResultCard({
           {copy.classifierModelVersion(d.model_version)}
         </p>
       ) : null}
-      {result.input_truncated ? <Warn>{copy.classifierTruncated}</Warn> : null}
+      {result.input_truncated ? (
+        <Warn>{local ? copy.classifierTruncatedWindow : copy.classifierTruncated}</Warn>
+      ) : null}
     </article>
   )
 }
