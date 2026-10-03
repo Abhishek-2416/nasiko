@@ -16,4 +16,7 @@ export const ROUTER_VARIANT_KEYS = [
   'router-legacy',
   'router-budgets-empty',
   'router-budgets-fail',
+  'router-classifier-regex',
+  'router-classifier-unconfigured',
+  'router-classifier-fail',
 ] as const

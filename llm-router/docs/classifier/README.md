@@ -14,6 +14,7 @@ directory holds the contribution's docs; the code lives in `llm-router/src/routi
 | [RESULTS.md](RESULTS.md) | measured results for regex, Laya and (not run) Jev; what is and is not verified; runtime feasibility |
 | [LAYA.md](LAYA.md) | the local Laya backend: setup script, verified reference behaviour, parity, packaging obstacles |
 | [PR-core.md](PR-core.md) | the hackathon PR description (Track, how to run, model ids, results, limits) |
+| [COMPANION.md](COMPANION.md) / [PR-companion.md](PR-companion.md) | the optional UI/server companion (outside the hackathon scope) |
 
 ## Quick start
 
